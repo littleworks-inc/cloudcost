@@ -28,3 +28,4 @@ go.work
 *.swo# Configuration files with secrets
 configs/*.local.yaml
 .env
+test/
