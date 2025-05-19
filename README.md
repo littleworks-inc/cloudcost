@@ -1,3 +1,5 @@
+Great! Here's the final version of the README with the Current Implementation Status and Roadmap sections added, but without the Getting Help section:
+
 ```markdown
 # Cloud Cost Estimator for Infrastructure-as-Code (IaC)
 
@@ -10,6 +12,22 @@ A CLI tool and SaaS web service that estimates infrastructure costs based on IaC
 - Compare cost differences between current and proposed infrastructure changes
 - Integrate with CI/CD pipelines (GitHub Actions, GitLab, Jenkins)
 - Support user-friendly output formats (text, JSON, CSV, HTML)
+
+## Current Implementation Status
+
+The project is under active development. Currently implemented features:
+
+- ✅ Terraform parser for extracting resources
+- ✅ AWS pricing client for retrieving real-time pricing data
+- ✅ Command-line interface with estimate and diff commands
+- ✅ Text, CSV, and HTML output formatters
+
+Coming soon:
+- 🔜 Ansible parser
+- 🔜 CloudFormation parser
+- 🔜 Azure pricing client
+- 🔜 GCP pricing client
+- 🔜 Web dashboard for visual analysis
 
 ## Installation
 
@@ -262,6 +280,13 @@ The minimum IAM permissions required are:
 }
 ```
 
+## Roadmap
+
+- **Q2 2025**: Complete additional IaC parsers and cloud pricing clients
+- **Q3 2025**: Add support for reserved instances and savings plans
+- **Q4 2025**: Release web dashboard and API
+- **Q1 2026**: Add AI-powered cost optimization suggestions
+
 ## CI/CD Integration
 
 ### GitHub Actions
@@ -367,29 +392,4 @@ We welcome contributions from the community! Please feel free to submit pull req
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-
-## Current Implementation Status
-
-The project is under active development. Currently implemented features:
-
-- ✅ Terraform parser for extracting resources
-- ✅ AWS pricing client for retrieving real-time pricing data
-- ✅ Command-line interface with estimate and diff commands
-- ✅ Text, CSV, and HTML output formatters
-
-Coming soon:
-- 🔜 Ansible parser
-- 🔜 CloudFormation parser
-- 🔜 Azure pricing client
-- 🔜 GCP pricing client
-- 🔜 Web dashboard for visual analysis
-
-## Roadmap
-
-Complete additional IaC parsers and cloud pricing clients
-Add support for reserved instances and savings plans
-Release web dashboard and API
-Add AI-powered cost optimization suggestions
-
 ```
