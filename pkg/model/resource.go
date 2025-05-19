@@ -25,14 +25,15 @@ type Resource struct {
 
 // PricingDetails contains detailed pricing information
 type PricingDetails struct {
-	Currency        string           `json:"currency"`
-	EffectiveDate   time.Time        `json:"effective_date"`
-	PricingTiers    []PriceTier      `json:"pricing_tiers,omitempty"`
-	ReservedPricing bool             `json:"reserved_pricing"`
-	UpfrontFee      float64          `json:"upfront_fee,omitempty"`
-	PriceComponents []PriceComponent `json:"price_components,omitempty"`
-	PricingSource   string           `json:"pricing_source"` // API URL or source of pricing data
-	LastUpdated     time.Time        `json:"last_updated"`
+	Currency        string            `json:"currency"`
+	EffectiveDate   time.Time         `json:"effective_date"`
+	PricingTiers    []PriceTier       `json:"pricing_tiers,omitempty"`
+	ReservedPricing bool              `json:"reserved_pricing"`
+	UpfrontFee      float64           `json:"upfront_fee,omitempty"`
+	PriceComponents []PriceComponent  `json:"price_components,omitempty"`
+	PricingSource   string            `json:"pricing_source"` // API URL or source of pricing data
+	LastUpdated     time.Time         `json:"last_updated"`
+	MetaData        map[string]string `json:"metadata,omitempty"` // Additional metadata about pricing
 }
 
 // PriceTier represents a pricing tier (for tiered pricing models)
