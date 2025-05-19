@@ -1,0 +1,25 @@
+Resource Name,Resource Type,Provider,Region,Size,Quantity,Hourly Cost,Monthly Cost,Yearly Cost
+{{range .Resources}}{{.Name}},{{.ResourceType}},{{.Provider}},{{.Region}},{{.Size}},{{.Quantity}},{{printf "%.4f" .HourlyPrice}},{{printf "%.2f" .MonthlyPrice}},{{printf "%.2f" .YearlyPrice}}
+{{end}}
+
+Summary
+Total,,,,,,{{printf "%.4f" .TotalHourly}},{{printf "%.2f" .TotalMonthly}},{{printf "%.2f" .TotalYearly}}
+
+By Provider
+Provider,Monthly Cost
+{{range $provider, $cost := .ByProvider}}{{$provider}},{{printf "%.2f" $cost}}
+{{end}}
+
+By Resource Type
+Resource Type,Monthly Cost
+{{range $type, $cost := .ByResourceType}}{{$type}},{{printf "%.2f" $cost}}
+{{end}}
+
+By Region
+Region,Monthly Cost
+{{range $region, $cost := .ByRegion}}{{$region}},{{printf "%.2f" $cost}}
+{{end}}
+
+Report Details
+Infrastructure Type,{{.IaCFormat}}
+Generated,{{.Timestamp.Format "2006-01-02 15:04:05"}}

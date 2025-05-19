@@ -1,0 +1,54 @@
+CLOUD COST REPORT
+=================
+
+Infrastructure Type: {{.IaCFormat}}
+Generated: {{.Timestamp.Format "January 2, 2006 at 3:04 PM"}}
+
+COST SUMMARY
+-----------
+Hourly Cost:  ${{printf "%.4f" .TotalHourly}}
+Monthly Cost: ${{printf "%.2f" .TotalMonthly}}
+Yearly Cost:  ${{printf "%.2f" .TotalYearly}}
+
+BREAKDOWN BY PROVIDER
+--------------------
+{{range $provider, $cost := .ByProvider}}{{$provider}}: ${{printf "%.2f" $cost}}
+{{end}}
+
+BREAKDOWN BY RESOURCE TYPE
+-------------------------
+{{range $type, $cost := .ByResourceType}}{{$type}}: ${{printf "%.2f" $cost}}
+{{end}}
+
+BREAKDOWN BY REGION
+-----------------
+{{range $region, $cost := .ByRegion}}{{$region}}: ${{printf "%.2f" $cost}}
+{{end}}
+
+RESOURCE DETAILS
+--------------
+{{range .Resources}}
+Name:     {{.Name}}
+Type:     {{.ResourceType}}
+Provider: {{.Provider}}
+Region:   {{.Region}}
+Size:     {{.Size}}
+Quantity: {{.Quantity}}
+Cost:     ${{printf "%.2f" .MonthlyPrice}}/month
+{{end}}
+
+{{if .Warnings}}
+WARNINGS
+-------
+{{range .Warnings}}
+- {{.}}
+{{end}}
+{{end}}
+
+{{if .Errors}}
+ERRORS
+-----
+{{range .Errors}}
+- {{.}}
+{{end}}
+{{end}}

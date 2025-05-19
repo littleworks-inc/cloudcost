@@ -1,0 +1,71 @@
+# Default configuration for Cloud Cost Estimator
+# This file defines defaults that can be overridden by user configuration
+
+# General settings
+general:
+  currency: USD
+  output_format: text  # text, json, csv, html
+  output_file: ""      # Empty means stdout
+
+# Cloud provider settings
+providers:
+  aws:
+    enabled: true
+    regions:
+      - us-east-1      # N. Virginia
+      - us-west-2      # Oregon
+      - eu-west-1      # Ireland
+    # Credentials will be loaded from environment variables or AWS config
+  
+  azure:
+    enabled: true
+    regions:
+      - eastus         # East US
+      - westus2        # West US 2
+      - westeurope     # West Europe
+    # Credentials will be loaded from environment variables or Azure CLI
+  
+  gcp:
+    enabled: true
+    regions:
+      - us-central1    # Iowa
+      - us-east4       # N. Virginia
+      - europe-west1   # Belgium
+    # Credentials will be loaded from environment variables or gcloud CLI
+
+# IaC parser settings
+parsers:
+  terraform:
+    enabled: true
+    plan_file: ""      # Path to plan file, empty means auto-detect
+  
+  pulumi:
+    enabled: true
+    preview_file: ""   # Path to preview JSON file, empty means auto-detect
+  
+  cloudformation:
+    enabled: true
+    template_file: ""  # Path to template file, empty means auto-detect
+  
+  azure_arm:
+    enabled: true
+    template_file: ""  # Path to template file, empty means auto-detect
+  
+  ansible:
+    enabled: true
+    playbook_file: ""  # Path to playbook file, empty means auto-detect
+
+# Pricing settings
+pricing:
+  cache_ttl: 3600      # Cache TTL in seconds
+  cache_dir: ""        # Empty means use system temp directory
+  reserved_instances: false
+  savings_plans: false
+  spot_instances: false
+
+# Resource filter settings
+filters:
+  include_types: []    # Empty means include all
+  exclude_types: []    # Empty means exclude none
+  include_tags: {}     # Empty means include all
+  exclude_tags: {}     # Empty means exclude none

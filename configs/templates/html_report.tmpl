@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Cost Report - {{.IaCFormat}}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        .report-header {
+            margin-bottom: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 20px;
+        }
+        .report-summary {
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .cost-card {
+            display: inline-block;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-right: 15px;
+            margin-bottom: 15px;
+            min-width: 200px;
+        }
+        .cost-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2980b9;
+        }
+        .cost-label {
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .chart-container {
+            height: 400px;
+            margin-bottom: 30px;
+        }
+        .breakdown-section {
+            margin-top: 30px;
+            margin-bottom: 30px;
+        }
+        .warning {
+            background-color: #fcf8e3;
+            border-left: 5px solid #f0ad4e;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .error {
+            background-color: #f2dede;
+            border-left: 5px solid #d9534f;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        footer {
+            margin-top: 50px;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 12px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="report-header">
+        <h1>Cloud Cost Report</h1>
+        <p>Infrastructure Type: {{.IaCFormat}}</p>
+        <p>Generated: {{.Timestamp.Format "January 2, 2006 at 3:04 PM"}}</p>
+    </div>
+
+    <div class="report-summary">
+        <h2>Cost Summary</h2>
+        <div>
+            <div class="cost-card">
+                <div class="cost-label">Monthly Cost</div>
+                <div class="cost-value">{{printf "$%.2f" .TotalMonthly}}</div>
+            </div>
+            <div class="cost-card">
+                <div class="cost-label">Yearly Cost</div>
+                <div class="cost-value">{{printf "$%.2f" .TotalYearly}}</div>
+            </div>
+            <div class="cost-card">
+                <div class="cost-label">Hourly Cost</div>
+                <div class="cost-value">{{printf "$%.2f" .TotalHourly}}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Provider Breakdown Chart -->
+    <div class="breakdown-section">
+        <h2>Cost by Provider</h2>
+        <div class="chart-container">
+            <canvas id="providerChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Resource Type Breakdown Chart -->
+    <div class="breakdown-section">
+        <h2>Cost by Resource Type</h2>
+        <div class="chart-container">
+            <canvas id="resourceTypeChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Region Breakdown Chart -->
+    <div class="breakdown-section">
+        <h2>Cost by Region</h2>
+        <div class="chart-container">
+            <canvas id="regionChart"></canvas>
+        </div>
+    </div>
+
+    <h2>Resource Details</h2>
+    <table>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Provider</th>
+            <th>Region</th>
+            <th>Size</th>
+            <th>Quantity</th>
+            <th>Monthly Cost</th>
+        </tr>
+        {{range .Resources}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.ResourceType}}</td>
+            <td>{{.Provider}}</td>
+            <td>{{.Region}}</td>
+            <td>{{.Size}}</td>
+            <td>{{.Quantity}}</td>
+            <td>{{printf "$%.2f" .MonthlyPrice}}</td>
+        </tr>
+        {{end}}
+    </table>
+
+    {{if .Warnings}}
+    <h2>Warnings</h2>
+    {{range .Warnings}}
+    <div class="warning">{{.}}</div>
+    {{end}}
+    {{end}}
+
+    {{if .Errors}}
+    <h2>Errors</h2>
+    {{range .Errors}}
+    <div class="error">{{.}}</div>
+    {{end}}
+    {{end}}
+
+    <footer>
+        Generated by Cloud Cost Estimator - v{{.Version}}
+    </footer>
+
+    <script>
+        // Provider Chart
+        const providerCtx = document.getElementById('providerChart').getContext('2d');
+        const providerChart = new Chart(providerCtx, {
+            type: 'pie',
+            data: {
+                labels: [
+                    {{range $provider, $cost := .ByProvider}}
+                    "{{$provider}}",
+                    {{end}}
+                ],
+                datasets: [{
+                    data: [
+                        {{range $provider, $cost := .ByProvider}}
+                        {{$cost}},
+                        {{end}}
+                    ],
+                    backgroundColor: [
+                        '#3498db',
+                        '#2ecc71',
+                        '#e74c3c',
+                        '#f39c12',
+                        '#9b59b6',
+                        '#1abc9c',
+                        '#d35400',
+                        '#34495e'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.label || '';
+                                const value = context.raw;
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = Math.round((value / total) * 100);
+                                return `${label}: $${value.toFixed(2)} (${percentage}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Resource Type Chart
+        const resourceTypeCtx = document.getElementById('resourceTypeChart').getContext('2d');
+        const resourceTypeChart = new Chart(resourceTypeCtx, {
+            type: 'bar',
+            data: {
+                labels: [
+                    {{range $type, $cost := .ByResourceType}}
+                    "{{$type}}",
+                    {{end}}
+                ],
+                datasets: [{
+                    label: 'Monthly Cost ($)',
+                    data: [
+                        {{range $type, $cost := .ByResourceType}}
+                        {{$cost}},
+                        {{end}}
+                    ],
+                    backgroundColor: '#3498db'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Region Chart
+        const regionCtx = document.getElementById('regionChart').getContext('2d');
+        const regionChart = new Chart(regionCtx, {
+            type: 'bar',
+            data: {
+                labels: [
+                    {{range $region, $cost := .ByRegion}}
+                    "{{$region}}",
+                    {{end}}
+                ],
+                datasets: [{
+                    label: 'Monthly Cost ($)',
+                    data: [
+                        {{range $region, $cost := .ByRegion}}
+                        {{$cost}},
+                        {{end}}
+                    ],
+                    backgroundColor: '#2ecc71'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
