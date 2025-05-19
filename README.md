@@ -282,10 +282,10 @@ The minimum IAM permissions required are:
 
 ## Roadmap
 
-- **Q2 2025**: Complete additional IaC parsers and cloud pricing clients
-- **Q3 2025**: Add support for reserved instances and savings plans
-- **Q4 2025**: Release web dashboard and API
-- **Q1 2026**: Add AI-powered cost optimization suggestions
+- Complete additional IaC parsers and cloud pricing clients
+- Add support for reserved instances and savings plans
+- Release web dashboard and API
+- Add AI-powered cost optimization suggestions
 
 ## CI/CD Integration
 
