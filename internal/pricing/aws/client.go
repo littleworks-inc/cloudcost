@@ -67,6 +67,9 @@ func (c *Client) GetPrice(resource *model.Resource) error {
 		return fmt.Errorf("AWS pricing data unavailable: %v", c.error)
 	}
 
+	fmt.Printf("Fetching price for: %s (%s) in region %s\n",
+		resource.ResourceType, resource.Size, resource.Region)
+
 	// Set the region from the resource if available
 	region := resource.Region
 	if region == "" {
@@ -74,75 +77,52 @@ func (c *Client) GetPrice(resource *model.Resource) error {
 		region = "us-east-1"
 	}
 
-	// Determine the service and instance type based on the resource type
-	var service, instanceType string
+	// Determine service code and build appropriate filters based on resource type pattern
+	var serviceCode string
+	var filters []types.Filter
 
+	// Determine service based on resource type pattern
 	switch {
 	case strings.HasPrefix(resource.ResourceType, "aws_instance"):
-		service = "AmazonEC2"
-		instanceType = resource.Size
+		serviceCode = "AmazonEC2"
+		filters = buildEC2Filters(resource.Size, region)
 	case strings.HasPrefix(resource.ResourceType, "aws_db_instance"):
-		service = "AmazonRDS"
-		instanceType = resource.Size
+		serviceCode = "AmazonRDS"
+		filters = buildRDSFilters(resource.Size, region)
 	case strings.HasPrefix(resource.ResourceType, "aws_elasticache"):
-		service = "AmazonElastiCache"
-		instanceType = resource.Size
+		serviceCode = "AmazonElastiCache"
+		filters = buildElastiCacheFilters(resource.Size, region)
 	default:
 		// For unknown resource types
 		resource.HourlyPrice = 0
 		resource.MonthlyPrice = 0
 		resource.YearlyPrice = 0
-
-		// Set pricing details with error information
-		resource.PricingDetails = &model.PricingDetails{
-			Currency:      "USD",
-			LastUpdated:   time.Now(),
-			PricingSource: "Error: Unsupported resource type",
-		}
-
 		return fmt.Errorf("unsupported resource type for pricing: %s", resource.ResourceType)
 	}
 
-	// Build filters for the pricing API
-	filters := []types.Filter{
-		{
-			Field: aws.String("ServiceCode"),
-			Type:  types.FilterTypeTermMatch,
-			Value: aws.String(service),
-		},
-	}
+	fmt.Printf("Using service code: %s with %d filters\n", serviceCode, len(filters))
 
-	// Add region filter
-	filters = append(filters, types.Filter{
-		Field: aws.String("regionCode"),
-		Type:  types.FilterTypeTermMatch,
-		Value: aws.String(region),
-	})
+	// Call the AWS pricing API with a retry mechanism
+	var response *awspricing.GetProductsOutput
+	var err error
 
-	// Add instance type filter if available
-	if instanceType != "" {
-		switch service {
-		case "AmazonEC2":
-			filters = append(filters, types.Filter{
-				Field: aws.String("instanceType"),
-				Type:  types.FilterTypeTermMatch,
-				Value: aws.String(instanceType),
-			})
-		case "AmazonRDS":
-			filters = append(filters, types.Filter{
-				Field: aws.String("instanceType"),
-				Type:  types.FilterTypeTermMatch,
-				Value: aws.String(instanceType),
-			})
+	for attempt := 1; attempt <= 3; attempt++ {
+		response, err = c.pricingClient.GetProducts(context.TODO(), &awspricing.GetProductsInput{
+			Filters:     filters,
+			MaxResults:  aws.Int32(100),
+			ServiceCode: aws.String(serviceCode),
+		})
+
+		if err == nil {
+			break
+		}
+
+		fmt.Printf("Attempt %d failed: %v\n", attempt, err)
+		if attempt < 3 {
+			// Wait before retrying
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
 	}
-
-	// Call the AWS pricing API
-	response, err := c.pricingClient.GetProducts(context.TODO(), &awspricing.GetProductsInput{
-		Filters:     filters,
-		MaxResults:  aws.Int32(100),
-		ServiceCode: aws.String(service),
-	})
 
 	if err != nil {
 		// If API call fails, set prices to zero and return error
@@ -160,167 +140,478 @@ func (c *Client) GetPrice(resource *model.Resource) error {
 		return fmt.Errorf("failed to get pricing data: %v", err)
 	}
 
+	fmt.Printf("Got %d pricing results\n", len(response.PriceList))
+
 	// Process the pricing data
 	if len(response.PriceList) > 0 {
 		// Initialize pricing details
 		resource.PricingDetails = &model.PricingDetails{
-			Currency:    "USD",
-			LastUpdated: time.Now(),
+			Currency:      "USD",
+			LastUpdated:   time.Now(),
+			PricingSource: "AWS Pricing API",
 		}
 
-		// Parse the first price in the list (we'll pick the first match)
-		var priceData map[string]interface{}
-		if err := json.Unmarshal([]byte(response.PriceList[0]), &priceData); err != nil {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: Failed to parse pricing data"
-			return fmt.Errorf("failed to parse pricing data: %v", err)
-		}
+		// Try a few results until we find one with pricing
+		var priceFound bool
 
-		// Extract on-demand pricing (this structure depends on AWS API response)
-		terms, ok := priceData["terms"].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: Invalid pricing data structure"
-			return fmt.Errorf("invalid pricing data structure")
-		}
+		for i, priceListItem := range response.PriceList {
+			if i >= 5 { // Limit to first 5 results to avoid excessive processing
+				break
+			}
 
-		onDemand, ok := terms["OnDemand"].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No on-demand pricing available"
-			return fmt.Errorf("no on-demand pricing available")
-		}
+			// Parse the price data
+			var priceData map[string]interface{}
+			if err := json.Unmarshal([]byte(priceListItem), &priceData); err != nil {
+				fmt.Printf("Failed to parse pricing data: %v\n", err)
+				continue
+			}
 
-		// Get the first on-demand price SKU
-		var sku string
-		for k := range onDemand {
-			sku = k
-			break
-		}
-
-		if sku == "" {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No pricing SKU found"
-			return fmt.Errorf("no pricing SKU found")
-		}
-
-		priceData, ok = onDemand[sku].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: Invalid SKU pricing structure"
-			return fmt.Errorf("invalid SKU pricing structure")
-		}
-
-		// Get the first price dimension
-		dimensions, ok := priceData["priceDimensions"].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No price dimensions found"
-			return fmt.Errorf("no price dimensions found")
-		}
-
-		var dimensionKey string
-		for k := range dimensions {
-			dimensionKey = k
-			break
-		}
-
-		if dimensionKey == "" {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No price dimension key found"
-			return fmt.Errorf("no price dimension key found")
-		}
-
-		dimension, ok := dimensions[dimensionKey].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: Invalid price dimension structure"
-			return fmt.Errorf("invalid price dimension structure")
-		}
-
-		// Get the price per unit
-		pricePerUnit, ok := dimension["pricePerUnit"].(map[string]interface{})
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No price per unit found"
-			return fmt.Errorf("no price per unit found")
-		}
-
-		// Get the USD price
-		usdPrice, ok := pricePerUnit["USD"].(string)
-		if !ok {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: No USD price found"
-			return fmt.Errorf("no USD price found")
-		}
-
-		// Parse the price as float
-		var hourlyPrice float64
-		if _, err := fmt.Sscanf(usdPrice, "%f", &hourlyPrice); err != nil {
-			// Set pricing details with error information
-			resource.PricingDetails.PricingSource = "Error: Failed to parse price"
-			return fmt.Errorf("failed to parse price: %v", err)
-		}
-
-		// Set the hourly price
-		resource.HourlyPrice = hourlyPrice
-
-		// Calculate monthly and yearly prices
-		resource.MonthlyPrice = resource.HourlyPrice * 730 // Average hours per month
-		resource.YearlyPrice = resource.HourlyPrice * 8760 // Hours per year
-
-		// Set pricing details source
-		resource.PricingDetails.PricingSource = "AWS Pricing API"
-
-		// Get unit of measure
-		unit, ok := dimension["unit"].(string)
-		if ok {
-			// Add a price component for the main unit
-			resource.PricingDetails.PriceComponents = append(
-				resource.PricingDetails.PriceComponents,
-				model.PriceComponent{
-					Name:      "On-Demand " + unit,
-					UnitPrice: hourlyPrice,
-					Units:     1,
-					Total:     hourlyPrice,
-				},
-			)
-		}
-
-		// Get product details
-		product, ok := priceData["product"].(map[string]interface{})
-		if ok {
-			attributes, ok := product["attributes"].(map[string]interface{})
-			if ok {
-				// Store product attributes
-				if resource.PricingDetails.MetaData == nil {
-					resource.PricingDetails.MetaData = make(map[string]string)
-				}
-
-				for k, v := range attributes {
-					if str, ok := v.(string); ok {
-						resource.PricingDetails.MetaData[k] = str
+			// Extract product details for logging
+			product, hasProduct := priceData["product"].(map[string]interface{})
+			if hasProduct {
+				attributes, hasAttrs := product["attributes"].(map[string]interface{})
+				if hasAttrs {
+					if instanceType, ok := attributes["instanceType"].(string); ok {
+						fmt.Printf("Result %d is for instance type: %s\n", i, instanceType)
 					}
 				}
 			}
+
+			// Extract on-demand pricing
+			terms, ok := priceData["terms"].(map[string]interface{})
+			if !ok {
+				fmt.Printf("Result %d: Invalid pricing terms structure\n", i)
+				continue
+			}
+
+			onDemand, ok := terms["OnDemand"].(map[string]interface{})
+			if !ok {
+				fmt.Printf("Result %d: No on-demand pricing available\n", i)
+				continue
+			}
+
+			// Try to find a valid price
+			for _, priceData := range onDemand {
+				priceDimensions, ok := priceData.(map[string]interface{})["priceDimensions"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				for _, dimension := range priceDimensions {
+					dimensionData, ok := dimension.(map[string]interface{})
+					if !ok {
+						continue
+					}
+
+					pricePerUnit, ok := dimensionData["pricePerUnit"].(map[string]interface{})
+					if !ok {
+						continue
+					}
+
+					usdPrice, ok := pricePerUnit["USD"].(string)
+					if !ok {
+						continue
+					}
+
+					// Parse the price as float
+					var hourlyPrice float64
+					if _, err := fmt.Sscanf(usdPrice, "%f", &hourlyPrice); err != nil {
+						fmt.Printf("Failed to parse price '%s': %v\n", usdPrice, err)
+						continue
+					}
+
+					// Found a price!
+					fmt.Printf("Found price: $%f/hour\n", hourlyPrice)
+					resource.HourlyPrice = hourlyPrice
+					resource.MonthlyPrice = hourlyPrice * 730 // Average hours per month
+					resource.YearlyPrice = hourlyPrice * 8760 // Hours per year
+					priceFound = true
+
+					// Special handling for t3.micro with $0.00 price
+					if resource.Size == "t3.micro" && resource.HourlyPrice == 0 {
+						fmt.Printf("Special case: t3.micro shows $0.00 price, applying relative pricing calculation\n")
+
+						// Find t3.small price for comparison
+						t3SmallFilters := []types.Filter{
+							{
+								Field: aws.String("ServiceCode"),
+								Type:  types.FilterTypeTermMatch,
+								Value: aws.String("AmazonEC2"),
+							},
+							{
+								Field: aws.String("instanceType"),
+								Type:  types.FilterTypeTermMatch,
+								Value: aws.String("t3.small"),
+							},
+							{
+								Field: aws.String("operatingSystem"),
+								Type:  types.FilterTypeTermMatch,
+								Value: aws.String("Linux"),
+							},
+						}
+
+						// Call the AWS pricing API
+						t3SmallResponse, err := c.pricingClient.GetProducts(context.TODO(), &awspricing.GetProductsInput{
+							Filters:     t3SmallFilters,
+							MaxResults:  aws.Int32(10),
+							ServiceCode: aws.String("AmazonEC2"),
+						})
+
+						if err == nil && len(t3SmallResponse.PriceList) > 0 {
+							// Find t3.small price
+							var t3SmallPrice float64
+							var smallPriceFound bool
+
+							// Process each result
+							for _, priceListItem := range t3SmallResponse.PriceList {
+								var priceData map[string]interface{}
+								if err := json.Unmarshal([]byte(priceListItem), &priceData); err != nil {
+									continue
+								}
+
+								// Extract terms
+								terms, ok := priceData["terms"].(map[string]interface{})
+								if !ok {
+									continue
+								}
+
+								onDemand, ok := terms["OnDemand"].(map[string]interface{})
+								if !ok {
+									continue
+								}
+
+								// Process on-demand pricing
+								for _, priceData := range onDemand {
+									priceObj, ok := priceData.(map[string]interface{})
+									if !ok {
+										continue
+									}
+
+									priceDimensions, ok := priceObj["priceDimensions"].(map[string]interface{})
+									if !ok {
+										continue
+									}
+
+									// Process each price dimension
+									for _, dimension := range priceDimensions {
+										dimensionData, ok := dimension.(map[string]interface{})
+										if !ok {
+											continue
+										}
+
+										pricePerUnit, ok := dimensionData["pricePerUnit"].(map[string]interface{})
+										if !ok {
+											continue
+										}
+
+										usdPrice, ok := pricePerUnit["USD"].(string)
+										if !ok {
+											continue
+										}
+
+										// Parse price
+										if _, err := fmt.Sscanf(usdPrice, "%f", &t3SmallPrice); err == nil && t3SmallPrice > 0 {
+											fmt.Printf("Found t3.small price: $%f/hour\n", t3SmallPrice)
+											smallPriceFound = true
+											break
+										}
+									}
+
+									if smallPriceFound {
+										break
+									}
+								}
+
+								if smallPriceFound {
+									break
+								}
+							}
+
+							if smallPriceFound && t3SmallPrice > 0 {
+								// t3.micro is approximately half the price of t3.small
+								// This is based on the fact that t3.micro has half the vCPUs and memory
+								estimatedPrice := t3SmallPrice * 0.5
+								fmt.Printf("Calculating t3.micro price as 50%% of t3.small: $%f/hour\n", estimatedPrice)
+
+								resource.HourlyPrice = estimatedPrice
+								resource.MonthlyPrice = estimatedPrice * 730
+								resource.YearlyPrice = estimatedPrice * 8760
+
+								resource.PricingDetails.PricingSource = "Estimated based on t3.small pricing (50% ratio)"
+							}
+						}
+					}
+
+					break
+				}
+				if priceFound {
+					break
+				}
+			}
+			if priceFound {
+				break
+			}
+		}
+
+		if !priceFound {
+			fmt.Printf("Could not find valid pricing in any of the results\n")
+			resource.HourlyPrice = 0
+			resource.MonthlyPrice = 0
+			resource.YearlyPrice = 0
+			return fmt.Errorf("could not extract price from API response")
 		}
 	} else {
-		// If no pricing data found, set prices to zero
-		resource.HourlyPrice = 0
-		resource.MonthlyPrice = 0
-		resource.YearlyPrice = 0
+		// Try with fewer filters
+		if len(filters) > 2 {
+			fmt.Printf("No results with specific filters, trying with fewer filters\n")
 
-		// Set pricing details with error information
-		resource.PricingDetails = &model.PricingDetails{
-			Currency:      "USD",
-			LastUpdated:   time.Now(),
-			PricingSource: "Error: No pricing data found",
+			// Simplified filters - just service code and instance type
+			simplifiedFilters := []types.Filter{
+				{
+					Field: aws.String("ServiceCode"),
+					Type:  types.FilterTypeTermMatch,
+					Value: aws.String(serviceCode),
+				},
+			}
+
+			if resource.Size != "" {
+				// The field name might be different depending on the service
+				var fieldName string
+				switch serviceCode {
+				case "AmazonEC2":
+					fieldName = "instanceType"
+				case "AmazonRDS":
+					fieldName = "instanceType"
+				case "AmazonElastiCache":
+					fieldName = "cacheNodeType"
+				default:
+					fieldName = "instanceType"
+				}
+
+				simplifiedFilters = append(simplifiedFilters, types.Filter{
+					Field: aws.String(fieldName),
+					Type:  types.FilterTypeTermMatch,
+					Value: aws.String(resource.Size),
+				})
+			}
+
+			fmt.Printf("Trying simplified filters: %+v\n", simplifiedFilters)
+
+			simplifiedResponse, err := c.pricingClient.GetProducts(context.TODO(), &awspricing.GetProductsInput{
+				Filters:     simplifiedFilters,
+				MaxResults:  aws.Int32(100),
+				ServiceCode: aws.String(serviceCode),
+			})
+
+			if err == nil && len(simplifiedResponse.PriceList) > 0 {
+				fmt.Printf("Got %d results with simplified filters\n", len(simplifiedResponse.PriceList))
+
+				// Process the simplified response
+				var priceFound bool
+				for i, priceListItem := range simplifiedResponse.PriceList {
+					if i >= 5 { // Limit to first 5 results
+						break
+					}
+
+					var priceData map[string]interface{}
+					if err := json.Unmarshal([]byte(priceListItem), &priceData); err != nil {
+						continue
+					}
+
+					// Extract product details for logging
+					product, hasProduct := priceData["product"].(map[string]interface{})
+					if hasProduct {
+						attributes, hasAttrs := product["attributes"].(map[string]interface{})
+						if hasAttrs {
+							if instanceType, ok := attributes["instanceType"].(string); ok {
+								fmt.Printf("Simplified result %d is for instance type: %s\n", i, instanceType)
+							}
+						}
+					}
+
+					// Extract terms
+					if terms, ok := priceData["terms"].(map[string]interface{}); ok {
+						if onDemand, ok := terms["OnDemand"].(map[string]interface{}); ok {
+							for _, priceData := range onDemand {
+								if priceDimensions, ok := priceData.(map[string]interface{})["priceDimensions"].(map[string]interface{}); ok {
+									for _, dimension := range priceDimensions {
+										if dimensionData, ok := dimension.(map[string]interface{}); ok {
+											if pricePerUnit, ok := dimensionData["pricePerUnit"].(map[string]interface{}); ok {
+												if usdPrice, ok := pricePerUnit["USD"].(string); ok {
+													var hourlyPrice float64
+													if _, err := fmt.Sscanf(usdPrice, "%f", &hourlyPrice); err == nil {
+														fmt.Printf("Found price with simplified filters: $%f/hour\n", hourlyPrice)
+
+														// Only use non-zero prices
+														if hourlyPrice > 0 {
+															// Initialize pricing details if needed
+															if resource.PricingDetails == nil {
+																resource.PricingDetails = &model.PricingDetails{
+																	Currency:      "USD",
+																	LastUpdated:   time.Now(),
+																	PricingSource: "AWS Pricing API (simplified query)",
+																}
+															}
+
+															resource.HourlyPrice = hourlyPrice
+															resource.MonthlyPrice = hourlyPrice * 730
+															resource.YearlyPrice = hourlyPrice * 8760
+															priceFound = true
+															break
+														}
+													}
+												}
+											}
+										}
+									}
+									if priceFound {
+										break
+									}
+								}
+							}
+						}
+					}
+
+					if priceFound {
+						break
+					}
+				}
+
+				if !priceFound {
+					fmt.Printf("Could not find valid pricing in simplified results\n")
+					resource.HourlyPrice = 0
+					resource.MonthlyPrice = 0
+					resource.YearlyPrice = 0
+					return fmt.Errorf("no valid pricing found for resource: %s", resource.ID)
+				}
+			} else {
+				fmt.Printf("Still no results with simplified filters\n")
+				resource.HourlyPrice = 0
+				resource.MonthlyPrice = 0
+				resource.YearlyPrice = 0
+				return fmt.Errorf("no pricing data found for resource: %s", resource.ID)
+			}
+		} else {
+			// If no pricing data found and we've already tried simplified filters
+			resource.HourlyPrice = 0
+			resource.MonthlyPrice = 0
+			resource.YearlyPrice = 0
+			return fmt.Errorf("no pricing data found for resource: %s", resource.ID)
 		}
-
-		return fmt.Errorf("no pricing data found for resource: %s", resource.ID)
 	}
 
 	return nil
+}
+
+// Helper functions to build filters for different services
+func buildEC2Filters(instanceType, region string) []types.Filter {
+	filters := []types.Filter{
+		{
+			Field: aws.String("ServiceCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String("AmazonEC2"),
+		},
+	}
+
+	// Add region filter
+	if region != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("regionCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(region),
+		})
+	}
+
+	// Add instance type filter if available
+	if instanceType != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("instanceType"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(instanceType),
+		})
+	}
+
+	// Add additional common filters for EC2
+	filters = append(filters, types.Filter{
+		Field: aws.String("operatingSystem"),
+		Type:  types.FilterTypeTermMatch,
+		Value: aws.String("Linux"),
+	})
+
+	filters = append(filters, types.Filter{
+		Field: aws.String("tenancy"),
+		Type:  types.FilterTypeTermMatch,
+		Value: aws.String("Shared"),
+	})
+
+	return filters
+}
+
+func buildRDSFilters(instanceType, region string) []types.Filter {
+	filters := []types.Filter{
+		{
+			Field: aws.String("ServiceCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String("AmazonRDS"),
+		},
+	}
+
+	// Add region filter
+	if region != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("regionCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(region),
+		})
+	}
+
+	// Add instance type filter if available
+	if instanceType != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("instanceType"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(instanceType),
+		})
+	}
+
+	// Add database engine filter (default to MySQL)
+	filters = append(filters, types.Filter{
+		Field: aws.String("databaseEngine"),
+		Type:  types.FilterTypeTermMatch,
+		Value: aws.String("MySQL"),
+	})
+
+	return filters
+}
+
+func buildElastiCacheFilters(instanceType, region string) []types.Filter {
+	filters := []types.Filter{
+		{
+			Field: aws.String("ServiceCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String("AmazonElastiCache"),
+		},
+	}
+
+	// Add region filter
+	if region != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("regionCode"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(region),
+		})
+	}
+
+	// Add instance type filter if available
+	if instanceType != "" {
+		filters = append(filters, types.Filter{
+			Field: aws.String("cacheNodeType"),
+			Type:  types.FilterTypeTermMatch,
+			Value: aws.String(instanceType),
+		})
+	}
+
+	return filters
 }
 
 // GetName returns the name of the pricing client

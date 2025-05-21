@@ -17,11 +17,14 @@ import (
 // Parser implements the parser.Parser interface for Terraform files
 type Parser struct {
 	// Configuration options can be added here
+	analyzer *parser.ResourceAnalyzer
 }
 
 // NewParser creates a new Terraform parser
 func NewParser() parser.Parser {
-	return &Parser{}
+	return &Parser{
+		analyzer: &parser.ResourceAnalyzer{},
+	}
 }
 
 // Parse parses Terraform files and extracts resources
@@ -57,7 +60,7 @@ func (p *Parser) Parse(path string) ([]model.Resource, error) {
 	// Parse all Terraform files
 	resources := []model.Resource{}
 
-	parser := hclparse.NewParser()
+	hclParser := hclparse.NewParser()
 
 	for _, file := range tfFiles {
 		src, err := ioutil.ReadFile(file)
@@ -65,7 +68,7 @@ func (p *Parser) Parse(path string) ([]model.Resource, error) {
 			return nil, fmt.Errorf("failed to read file %s: %v", file, err)
 		}
 
-		f, diags := parser.ParseHCL(src, file)
+		f, diags := hclParser.ParseHCL(src, file)
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("failed to parse file %s: %v", file, diags)
 		}
@@ -88,50 +91,56 @@ func (p *Parser) Parse(path string) ([]model.Resource, error) {
 				resourceType := block.Labels[0]
 				resourceName := block.Labels[1]
 
-				// Extract provider and actual resource type
-				parts := strings.Split(resourceType, "_")
-				if len(parts) < 2 {
-					continue // Skip invalid resource types
-				}
-
-				provider := parts[0]
-
 				// Create resource
 				resource := model.NewResource()
 				resource.ID = fmt.Sprintf("%s.%s", resourceType, resourceName)
 				resource.Name = resourceName
 				resource.ResourceType = resourceType
-				resource.Provider = provider
+
+				// Extract provider from resource type
+				parts := strings.Split(resourceType, "_")
+				if len(parts) > 0 {
+					resource.Provider = parts[0]
+				}
 
 				// Extract attributes
 				attrs, _ := block.Body.JustAttributes()
-				for name, attr := range attrs {
-					value, diags := attr.Expr.Value(nil)
-					if !diags.HasErrors() {
-						switch name {
-						case "region":
-							if value.Type() == cty.String {
-								resource.Region = value.AsString()
-							}
-						case "instance_type", "size":
-							if value.Type() == cty.String {
-								resource.Size = value.AsString()
-							}
-						case "count":
-							if value.Type() == cty.Number {
-								f, _ := value.AsBigFloat().Float64()
-								resource.Quantity = int(f)
+
+				// Use our analyzer to find size field
+				resource.Size = p.analyzer.FindSizeField(resourceType, attrs)
+
+				// Use our analyzer to find region field
+				region := p.analyzer.FindRegionField(resourceType, attrs)
+				if region != "" {
+					resource.Region = region
+				}
+
+				// Extract quantity and tags
+				resource.Quantity = p.analyzer.FindQuantity(attrs)
+				resource.Tags = p.analyzer.ExtractTags(attrs)
+
+				// If some properties weren't determined, fall back to original method
+				if resource.Size == "" {
+					// Try to find size attribute using explicit checks
+					for name, attr := range attrs {
+						value, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() {
+							if name == "instance_type" || name == "size" {
+								if value.Type() == cty.String {
+									resource.Size = value.AsString()
+								}
 							}
 						}
+					}
+				}
 
-						// Extract tags
-						if name == "tags" && value.Type().IsMapType() {
-							value.ForEachElement(func(key cty.Value, val cty.Value) bool {
-								if key.Type() == cty.String && val.Type() == cty.String {
-									resource.Tags[key.AsString()] = val.AsString()
-								}
-								return true
-							})
+				// If region wasn't determined, check explicitly
+				if resource.Region == "" {
+					// Try to find region attribute
+					if attr, ok := attrs["region"]; ok {
+						value, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() && value.Type() == cty.String {
+							resource.Region = value.AsString()
 						}
 					}
 				}
